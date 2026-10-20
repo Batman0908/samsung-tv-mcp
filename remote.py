@@ -11,6 +11,8 @@ import json
 import logging
 import re
 import socket
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -138,6 +140,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path, _, qs = self.path.partition("?")
         if path in ("/", "/index.html"):
+            log.info("Remote opened from %s (%s)", self.client_address[0], self.headers.get("User-Agent", "?")[:80])
             self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             return
         if path in STATIC:
@@ -183,6 +186,31 @@ class Handler(BaseHTTPRequestHandler):
         self._run(lambda: route(body))
 
 
+def _tv_is_on() -> bool:
+    try:
+        data = _tv._rest("", timeout=3)
+    except Exception:
+        return False
+    return (data or {}).get("device", {}).get("PowerState", "on") == "on"
+
+
+def watch_power(app_id: str, interval: float = 5.0, boot_delay: float = 6.0) -> None:
+    """Open app_id each time the TV turns on (Samsung only lets partner apps autostart)."""
+    was_on = _tv_is_on()
+    log.info("Will open %s whenever the TV turns on (TV is %s now)", app_id, "on" if was_on else "off")
+    while True:
+        time.sleep(interval)
+        is_on = _tv_is_on()
+        if is_on and not was_on:
+            time.sleep(boot_delay)  # let the TV finish starting Smart Hub first
+            try:
+                _tv.launch_app(app_id)
+                log.info("TV turned on; opened %s", app_id)
+            except Exception as e:
+                log.warning("TV turned on but %s didn't open: %s", app_id, e)
+        was_on = is_on
+
+
 def _lan_ip() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         try:
@@ -197,7 +225,11 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0",
                         help="Interface to listen on (default: all, so phones on your Wi-Fi can connect)")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--open-on-tv", metavar="APP_ID",
+                        help="Open this TV app whenever the TV turns on, e.g. LqGlassTV1.GlassHome")
     args = parser.parse_args()
+    if args.open_on_tv:
+        threading.Thread(target=watch_power, args=(args.open_on_tv,), daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     shown = _lan_ip() if args.host == "0.0.0.0" else args.host
     log.info("TV remote ready at http://%s:%d", shown, args.port)
