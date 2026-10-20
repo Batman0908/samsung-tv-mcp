@@ -203,12 +203,24 @@ def watch_power(app_id: str, interval: float = 5.0, boot_delay: float = 6.0) -> 
         is_on = _tv_is_on()
         if is_on and not was_on:
             time.sleep(boot_delay)  # let the TV finish starting Smart Hub first
-            try:
-                _tv.launch_app(app_id)
-                log.info("TV turned on; opened %s", app_id)
-            except Exception as e:
-                log.warning("TV turned on but %s didn't open: %s", app_id, e)
+            _open_after_boot(app_id)
         was_on = is_on
+
+
+def _open_after_boot(app_id: str, attempts: int = 12, wait: float = 5.0) -> bool:
+    """Right after power-on the TV rejects launches for a while, so retry until it's on screen."""
+    for attempt in range(1, attempts + 1):
+        try:
+            _tv._rest(f"applications/{app_id}", method="POST")
+            time.sleep(3)
+            if (_tv._rest(f"applications/{app_id}", timeout=3) or {}).get("visible"):
+                log.info("TV turned on; opened %s (attempt %d)", app_id, attempt)
+                return True
+        except Exception as e:
+            log.debug("Opening %s failed (attempt %d): %s", app_id, attempt, e)
+        time.sleep(wait)
+    log.warning("TV turned on but %s didn't open after %d attempts", app_id, attempts)
+    return False
 
 
 def _lan_ip() -> str:

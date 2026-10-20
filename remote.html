@@ -32,6 +32,7 @@
   }
 
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--night);
@@ -83,6 +84,9 @@
     font-variant-numeric: tabular-nums; text-shadow: 0 2px 24px rgba(10, 8, 40, 0.35); }
   .date { margin-top: 0.6vw; font-size: 1.5vw; font-weight: 500; color: var(--ink-soft); }
 
+  .weather { display: flex; align-items: center; margin-top: 1.1vw; font-size: 1.5vw; color: var(--ink-soft); }
+  .wx-icon svg { width: 2.2vw; height: 2.2vw; display: block; margin-right: 0.7vw; }
+  .wx-temp { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; margin-right: 0.7vw; }
   .status { display: flex; align-items: center; }
   .pill { display: flex; align-items: center; height: 3.6vw; min-height: 40px; padding: 0 1.3vw 0 1.1vw; border-radius: 999px;
     font-size: 1.15vw; font-weight: 500; color: var(--ink-soft); }
@@ -95,7 +99,7 @@
   .round svg { width: 42%; height: 42%; }
 
   /* On the TV itself: just the home screen, no remote */
-  .tv-mode .controls, .tv-mode #power { display: none; }
+  .tv-mode .controls, .tv-mode .status { display: none; }
   .tv-mode .app { padding-bottom: 9vh; }
 
   .stage { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
@@ -157,6 +161,10 @@
   .m-max { font-weight: 800; font-size: 2.2vw; color: #fff; letter-spacing: -0.05em; }
   .m-icon svg { width: 2.6vw; height: 2.6vw; }
   .m-letter { font-weight: 700; font-size: 2.4vw; }
+  .m-hulu { font-weight: 800; font-size: 2.2vw; color: #1ce783; letter-spacing: -0.03em; }
+  .m-word { font-weight: 800; font-size: 1.7vw; color: #fff; letter-spacing: -0.02em; }
+  .m-word b { font-weight: 800; color: #ffb066; }
+  .m-img { width: 3.4vw; height: 3.4vw; border-radius: 0.8vw; }
 
   .dock-note { padding: 2.4vw 1vw; text-align: center; color: var(--ink-soft); font-size: 1.2vw; }
 
@@ -190,6 +198,9 @@
     .app { padding: 20px var(--pad) 24px; padding-top: calc(20px + env(safe-area-inset-top)); }
     .clock { font-size: 56px; }
     .date { font-size: 15px; margin-top: 6px; }
+    .weather { font-size: 15px; margin-top: 8px; }
+    .wx-icon svg { width: 22px; height: 22px; margin-right: 7px; }
+    .wx-temp { margin-right: 7px; }
     .pill { font-size: 13px; padding: 0 12px; }
     .pill .name { display: none; }
     .pill .dot { margin-right: 8px; }
@@ -205,7 +216,7 @@
     .tile .face { padding-top: 78%; }
     .tile .label { font-size: 12px; }
     .m-netflix { font-size: 34px; } .m-prime { font-size: 19px; } .m-disney { font-size: 20px; }
-    .m-appletv, .m-max { font-size: 24px; } .m-letter { font-size: 26px; }
+    .m-appletv, .m-max, .m-hulu { font-size: 24px; } .m-letter { font-size: 26px; } .m-word { font-size: 19px; }
     .m-youtube { width: 38px; height: 27px; border-radius: 7px; }
     .m-youtube::after { border-left-width: 11px; border-top-width: 6px; border-bottom-width: 6px; }
     .m-icon svg { width: 28px; height: 28px; }
@@ -257,6 +268,7 @@
     <div>
       <div class="clock" id="clock">--:--</div>
       <div class="date" id="date"></div>
+      <div class="weather" id="weather" hidden><span class="wx-icon" id="wxIcon"></span><span class="wx-temp" id="wxTemp"></span><span class="wx-text" id="wxText"></span></div>
     </div>
     <div class="status">
       <div class="pill glass" id="pill"><span class="dot"></span><span class="name" id="tvName">Connecting to TV</span><span class="vol" id="pillVol" hidden></span></div>
@@ -309,12 +321,53 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var state = { apps: [], running: null, power: null, volume: null, muted: false, focus: 0 };
-  var tvMode = /[?&]tv=1/.test(location.search) || /Tizen|SMART-TV/i.test(navigator.userAgent);
+  var state = { apps: [], favorites: [], more: [], expanded: false, running: null, power: null, volume: null, muted: false, focus: 0 };
+  // Inside the packaged TV app, window.tizen talks to the TV directly (no server needed)
+  var tz = window.tizen && window.tizen.application ? window.tizen : null;
+  var tvMode = !!tz || /[?&]tv=1/.test(location.search) || /Tizen|SMART-TV/i.test(navigator.userAgent);
   if (tvMode) document.documentElement.className += " tv-mode";
+
+  // ── On the TV: apps come from the TV itself ───────────
+  // The dock shows exactly these apps, in this order, once each
+  var FAVORITES = [
+    ["netflix", /^netflix$/i], ["ib player pro", /^ibo? ?player/i], ["youtube", /^youtube$/i],
+    ["prime", /^prime video$/i], ["disney", /^disney\+?$/i], ["hulu", /^hulu$/i], ["max", /^(hbo )?max$/i]
+  ];
+  function nativeApi(path, body) {
+    return new Promise(function (resolve, reject) {
+      var fail = function (e) { reject(new Error((e && e.message) || "The TV refused the request")); };
+      if (path === "/api/apps") {
+        var selfId = tz.application.getAppInfo().id;
+        tz.application.getAppsInfo(function (list) {
+          // The TV lists some apps more than once (e.g. an app and its widget), so keep one per app
+          var byRank = {};
+          list.forEach(function (a) {
+            if (!a.show || a.id === selfId) return;
+            for (var i = 0; i < FAVORITES.length; i++) {
+              if (FAVORITES[i][1].test(a.name) && !byRank[i]) {
+                byRank[i] = { id: a.id, name: a.name, alias: FAVORITES[i][0], icon: a.iconPath };
+              }
+            }
+          });
+          var favs = [];
+          for (var r = 0; r < FAVORITES.length; r++) if (byRank[r]) favs.push(byRank[r]);
+          resolve({ apps: favs });
+        }, fail);
+      } else if (path === "/api/launch") {
+        tz.application.launch(body.id, function () { resolve({}); }, fail);
+      } else if (path === "/api/status") {
+        resolve({ power: "on" });
+      } else if (path === "/api/current") {
+        resolve({ app: null });
+      } else {
+        fail({ message: "That button only works from the phone remote" });
+      }
+    });
+  }
 
   // ── API ───────────────────────────────────────────────
   function api(path, body, timeoutMs) {
+    if (tz) return nativeApi(path, body);
     var ctrl = window.AbortController ? new AbortController() : null;
     var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, timeoutMs || 15000) : null;
     var opts = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
@@ -347,6 +400,40 @@
     $("date").textContent = now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   }
 
+  // ── Weather (Open-Meteo: free, no account) ───────────
+  var WEATHER = { place: "Dallas", lat: 32.78, lon: -96.80 };
+  var WX_ICONS = {
+    sun: '<svg viewBox="0 0 24 24" fill="none" stroke="#ffd58a" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2" fill="#ffd58a"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>',
+    moon: '<svg viewBox="0 0 24 24"><path fill="#ffe9cc" d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
+    cloud: '<svg viewBox="0 0 24 24"><path fill="#e8e6f5" d="M7 18.5h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7.2 9 4.75 4.75 0 0 0 7 18.5z"/></svg>',
+    rain: '<svg viewBox="0 0 24 24" fill="none" stroke="#8fd1ff" stroke-width="1.8" stroke-linecap="round"><path fill="#e8e6f5" stroke="none" d="M7 15h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7.2 5.5 4.75 4.75 0 0 0 7 15z"/><path d="M9 17.5l-1 3M13 17.5l-1 3M17 17.5l-1 3"/></svg>',
+    storm: '<svg viewBox="0 0 24 24"><path fill="#e8e6f5" d="M7 14.5h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7.2 5 4.75 4.75 0 0 0 7 14.5z"/><path fill="#ffd58a" d="M12.5 13l-3 5h2.5l-1 4 3.5-5.5h-2.5z"/></svg>',
+    snow: '<svg viewBox="0 0 24 24" fill="#fff"><path fill="#e8e6f5" d="M7 14.5h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7.2 5 4.75 4.75 0 0 0 7 14.5z"/><circle cx="9" cy="18.5" r="1.2"/><circle cx="13" cy="20" r="1.2"/><circle cx="16.5" cy="18" r="1.2"/></svg>'
+  };
+  function describe(code, isDay) {
+    if (code === 0) return [isDay ? "sun" : "moon", "Clear"];
+    if (code <= 2) return [isDay ? "sun" : "moon", "Partly cloudy"];
+    if (code === 3) return ["cloud", "Cloudy"];
+    if (code === 45 || code === 48) return ["cloud", "Foggy"];
+    if (code >= 51 && code <= 67) return ["rain", code < 61 ? "Drizzle" : "Rain"];
+    if (code >= 71 && code <= 77) return ["snow", "Snow"];
+    if (code >= 80 && code <= 82) return ["rain", "Showers"];
+    if (code >= 85 && code <= 86) return ["snow", "Snow showers"];
+    if (code >= 95) return ["storm", "Thunderstorms"];
+    return ["cloud", ""];
+  }
+  function weather() {
+    var url = "https://api.open-meteo.com/v1/forecast?latitude=" + WEATHER.lat + "&longitude=" + WEATHER.lon +
+      "&current=temperature_2m,weather_code,is_day&temperature_unit=fahrenheit&timezone=auto";
+    fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+      var c = d.current, w = describe(c.weather_code, c.is_day === 1);
+      $("wxIcon").innerHTML = WX_ICONS[w[0]];
+      $("wxTemp").textContent = Math.round(c.temperature_2m) + "°";
+      $("wxText").textContent = (w[1] ? w[1] + " in " : "") + WEATHER.place;
+      $("weather").hidden = false;
+    }, function () { /* keep the last reading; the clock still works offline */ });
+  }
+
   // ── Stars (deterministic so they don't jump between loads) ──
   function stars() {
     var seed = 7, shadows = [];
@@ -368,26 +455,35 @@
     hbo: { tint: "100,70,240", mark: '<span class="m-max">max</span>' },
     max: { tint: "100,70,240", mark: '<span class="m-max">max</span>' },
     browser: { tint: "80,190,255", mark: '<span class="m-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.6 3.8 5.6 3.8 9s-1.2 6.4-3.8 9c-2.6-2.6-3.8-5.6-3.8-9S9.4 5.6 12 3z"/></svg></span>' },
+    hulu: { tint: "28,231,131", mark: '<span class="m-hulu">hulu</span>' },
+    "ib player pro": { tint: "255,140,40", mark: '<span class="m-word">IB<b>PRO</b></span>' },
+    "iptv smarters": { tint: "60,140,255", mark: '<span class="m-word">IPTV</span>' },
     gallery: { tint: "255,170,90", mark: '<span class="m-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.6"/></svg></span>' }
   };
 
   function renderTiles() {
     var wrap = $("tiles");
     wrap.innerHTML = "";
+    // One row on wide screens, sized to the apps (no empty slots); phones use the CSS grid
+    wrap.style.gridTemplateColumns = window.innerWidth > 760 ? "repeat(" + Math.max(1, Math.min(state.apps.length, 8)) + ", 1fr)" : "";
     state.apps.forEach(function (app, i) {
       var brand = BRANDS[app.alias] || {};
       var b = document.createElement("button");
       b.type = "button";
       b.className = "tile";
       b.setAttribute("data-index", i);
-      b.setAttribute("aria-label", "Open " + app.name + " on TV");
+      b.setAttribute("aria-label", app.alias === "__more" ? app.name : "Open " + app.name + " on TV");
       b.tabIndex = i === state.focus ? 0 : -1;
       b.style.setProperty("--tint", brand.tint || "255,255,255");
       var face = document.createElement("span");
       face.className = "face";
       var mark = document.createElement("span");
       mark.className = "mark";
-      if (brand.mark) { mark.innerHTML = brand.mark; } else {
+      if (brand.mark) { mark.innerHTML = brand.mark; } else if (app.icon) {
+        var img = document.createElement("img"); img.className = "m-img"; img.src = app.icon; img.alt = ""; mark.appendChild(img);
+      } else if (app.alias === "__more") {
+        mark.innerHTML = '<span class="m-icon"><svg viewBox="0 0 24 24" fill="#fff"><circle cx="6" cy="6" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18" cy="12" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="12" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg></span>';
+      } else {
         var l = document.createElement("span"); l.className = "m-letter"; l.textContent = (app.name || "?").charAt(0); mark.appendChild(l);
       }
       var label = document.createElement("span");
@@ -424,7 +520,9 @@
     var app = state.apps[state.focus];
     if (!app) { $("capTitle").innerHTML = "&nbsp;"; $("capSub").innerHTML = "&nbsp;"; return; }
     $("capTitle").textContent = app.name;
-    $("capSub").textContent = state.running && state.running.id === app.id ? "Playing on your TV" : "Select to open on your TV";
+    $("capSub").textContent = app.alias === "__more" ? (state.expanded ? "Press OK to hide Samsung's extra apps" : "Press OK to see every app on this TV")
+      : state.running && state.running.id === app.id ? "Playing on your TV"
+      : tvMode ? "Press OK to open" : "Select to open on your TV";
   }
 
   function markRunning() {
@@ -452,7 +550,7 @@
   }
 
   $("tiles").addEventListener("keydown", function (e) {
-    var n = state.apps.length, cols = window.innerWidth <= 760 ? 3 : n, i = state.focus;
+    var n = state.apps.length, cols = window.innerWidth <= 760 ? 3 : 8, i = state.focus;
     var next = { ArrowRight: i + 1, ArrowLeft: i - 1, ArrowDown: i + cols, ArrowUp: i - cols, Home: 0, End: n - 1 }[e.key];
     if (next === undefined) return;
     e.preventDefault();
@@ -463,10 +561,11 @@
   function launch(i) {
     var app = state.apps[i], tile = tiles()[i];
     if (!app) return;
+    if (app.alias === "__more") { state.expanded = !state.expanded; showApps(); setFocus(state.apps.length - 1, true); return; }
     setFocus(i, false);
     tile.classList.remove("is-launching"); void tile.offsetWidth; tile.classList.add("is-launching");
     toast("Opening " + app.name + "…");
-    api("/api/launch", { app: app.alias }, 70000).then(function () {
+    api("/api/launch", { app: app.alias || app.id, id: app.id }, 70000).then(function () {
       toast(app.name + " is open on your TV");
       state.running = { id: app.id, name: app.alias };
       markRunning();
@@ -551,12 +650,28 @@
       .then(function (d) { state.running = d.app; markRunning(); }, function () {});
   }
 
+  // Dock order = FAVORITES order (most-used first); the server calls HBO Max "hbo"
+  function favRank(app) {
+    var alias = app.alias === "hbo" ? "max" : app.alias;
+    for (var i = 0; i < FAVORITES.length; i++) if (FAVORITES[i][0] === alias) return i;
+    return FAVORITES.length;
+  }
+
+  function showApps() {
+    state.apps = state.favorites.concat(state.expanded ? state.more : []);
+    if (state.more.length) state.apps.push({ id: "__more", alias: "__more", name: state.expanded ? "Fewer apps" : "All apps" });
+    renderTiles();
+  }
+
   function loadApps() {
     api("/api/apps", null, 90000).then(function (d) {
-      state.apps = d.apps || [];
-      if (!state.apps.length) $("dockNote").textContent = "No supported apps were found on this TV.";
-      renderTiles();
+      state.favorites = (d.apps || []).filter(function (a) { return favRank(a) < FAVORITES.length; })
+        .sort(function (x, y) { return favRank(x) - favRank(y); });
+      state.more = d.more || [];
+      if (!state.favorites.length && !state.more.length) $("dockNote").textContent = "No supported apps were found on this TV.";
+      showApps();
       refreshCurrent();
+      if (tvMode && state.apps.length) setFocus(0, true);
     }, function (err) {
       $("dockNote").textContent = "Couldn't load your apps. " + err.message + " Trying again in 20 seconds.";
       setTimeout(loadApps, 20000);
@@ -576,6 +691,8 @@
   stars();
   tick();
   setInterval(tick, 1000);
+  weather();
+  setInterval(weather, 15 * 60 * 1000);
   refreshStatus().then(loadApps, loadApps);
   setInterval(function () { if (!document.hidden) refreshStatus(); }, 15000);
   setInterval(function () { if (!document.hidden) refreshCurrent(); }, 30000);

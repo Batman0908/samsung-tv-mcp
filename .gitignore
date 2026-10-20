@@ -5,3 +5,4 @@ token.json
 *.egg-info/
 tv_state.json
 apps.json
+tizen-app/build/

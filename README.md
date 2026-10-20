@@ -94,6 +94,17 @@ python remote.py            # prints http://<this-computer>:8765
 
 It shows the apps installed on your TV (tap one to open it there), a D-pad, Home/Back, volume, mute, play/pause, source and power, and marks the app that is currently playing. It listens on your local network with no login, so only run it on a network you trust (use `--host 127.0.0.1` to keep it to this computer).
 
+## TV App (Glass Home)
+
+`tizen-app/` packages the same home screen as a Samsung TV app. On the TV it lists and opens apps through the TV's own API (no server needed) and shows the weather (Open-Meteo, no account).
+
+1. Install the [Tizen Studio CLI](https://developer.samsung.com/smarttv/develop/getting-started/setting-up-sdk/installing-tv-sdk.html) plus the Samsung Certificate Extension and TV Extensions (Apple Silicon Macs need Rosetta 2).
+2. Turn on Developer Mode on the TV (Apps → type `12345` → On, Host PC IP = your computer) and restart the TV.
+3. `sdb connect <tv-ip>`, then create a **Samsung** TV certificate profile in Certificate Manager (it picks up the TV's DUID).
+4. `./tizen-app/build.sh <profile> <tv-ip>`
+
+Samsung only lets partner apps start on their own, so `python remote.py --open-on-tv LqGlassTV1.GlassHome` watches the TV and opens Glass Home each time it turns on (it retries while the TV boots, typically 30–40s).
+
 ## Supported App Aliases
 
 You can use friendly names instead of numeric IDs:

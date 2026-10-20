@@ -138,6 +138,39 @@ class RemoteApiTests(StateFileCase):
         with self.assertRaises(ValueError):
             self.remote._key({"key": None})
 
+    def test_opens_app_only_when_tv_turns_on(self):
+        states = iter([False, False, True, True, False, True])
+
+        class Stop(Exception):
+            pass
+
+        def is_on():
+            try:
+                return next(states)
+            except StopIteration:
+                raise Stop
+
+        with mock.patch.object(self.remote, "_tv_is_on", side_effect=is_on), \
+             mock.patch.object(self.remote, "_open_after_boot") as opener, \
+             mock.patch.object(self.remote.time, "sleep"):
+            with self.assertRaises(Stop):
+                self.remote.watch_power("LqGlassTV1.GlassHome")
+        # off->on twice (polls 3 and 6), staying on doesn't relaunch
+        self.assertEqual(opener.call_count, 2)
+
+    def test_open_after_boot_retries_until_visible(self):
+        responses = iter([OSError("booting"), True, {"visible": False}, True, {"visible": True}])
+
+        def rest(path, method="GET", timeout=5):
+            r = next(responses)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        self.fake._rest.side_effect = rest
+        with mock.patch.object(self.remote.time, "sleep"):
+            self.assertTrue(self.remote._open_after_boot("LqGlassTV1.GlassHome"))
+
     def _server(self):
         import threading
         from http.server import ThreadingHTTPServer

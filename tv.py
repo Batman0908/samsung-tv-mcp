@@ -57,6 +57,10 @@ APP_ALIASES: dict[str, list[str]] = {
     "paramount": ["3201710014981"],
     "gallery": ["3201710015037"],
     "smartthings": ["3201710015016"],
+    "hulu": ["3201601007625"],
+    "youtube tv": ["3201707014489"],
+    "iptv smarters": ["3202009021808"],
+    "ib player pro": ["3202410037109"],
 }
 
 APPS_FILE = Path(__file__).parent / "apps.json"
