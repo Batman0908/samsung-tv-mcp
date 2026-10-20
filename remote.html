@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1433">
+<title>TV Remote</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TV Remote">
+<style>
+  :root {
+    --night: #0d1433;
+    --dusk: #3a2c6e;
+    --ember: #f29a6b;
+    --dune: #6e3b47;
+    --dune-deep: #24152c;
+    --ink: #ffffff;
+    --ink-soft: rgba(255, 255, 255, 0.74);
+    --ink-faint: rgba(255, 255, 255, 0.5);
+    --glass: rgba(255, 255, 255, 0.13);
+    --glass-strong: rgba(255, 255, 255, 0.24);
+    --rim: rgba(255, 255, 255, 0.34);
+    --shadow: rgba(8, 4, 28, 0.5);
+    --blur: blur(22px) saturate(180%);
+    --font: -apple-system, "SF Pro Display", "SF Pro Text", BlinkMacSystemFont, "SamsungOne", "Segoe UI", Roboto, sans-serif;
+    --pad: 5vw;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--night);
+    color: var(--ink);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  button { font: inherit; color: inherit; }
+
+  /* ── Wallpaper: dusk over dunes ───────────────────────── */
+  .scene { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 0; overflow: hidden;
+    background: linear-gradient(180deg, #0b1230 0%, #1c1d52 34%, var(--dusk) 56%, #b8607a 74%, var(--ember) 86%, #f6c08a 100%); }
+  .stars { position: absolute; top: 0; left: 0; width: 2px; height: 2px; border-radius: 50%; background: transparent; }
+  .moon { position: absolute; right: 22%; top: 19%; width: 4.6vmin; height: 4.6vmin; border-radius: 50%;
+    background: radial-gradient(circle at 38% 36%, #fffaf0 0%, #ffe9cc 60%, #f3cfa6 100%);
+    box-shadow: 0 0 40px 10px rgba(255, 220, 180, 0.22), 0 0 140px 40px rgba(255, 190, 150, 0.12); }
+  .dunes { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 58%; }
+
+  /* ── Liquid glass material ───────────────────────────── */
+  .glass {
+    position: relative;
+    background: rgba(46, 34, 84, 0.62); /* fallback for browsers without backdrop blur (older TV browsers) */
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -18px 30px -24px rgba(255, 255, 255, 0.35), 0 24px 48px -18px var(--shadow);
+  }
+  @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .glass { background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+  }
+  /* curved highlight along the top edge, like light caught in thick glass */
+  .glass::after {
+    content: ""; position: absolute; top: -1px; left: -1px; right: -1px; bottom: -1px; border-radius: inherit; pointer-events: none;
+    padding: 1.5px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.08) 38%, rgba(255, 255, 255, 0.04) 62%, rgba(255, 255, 255, 0.45));
+    -webkit-mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+  }
+  .glass::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 55%; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.04) 60%, rgba(255, 255, 255, 0) 100%);
+  }
+
+  /* ── Layout ──────────────────────────────────────────── */
+  .app { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column;
+    padding: 4.5vh var(--pad) 4vh; }
+
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .clock { font-weight: 300; font-size: 7.4vw; line-height: 0.95; letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums; text-shadow: 0 2px 24px rgba(10, 8, 40, 0.35); }
+  .date { margin-top: 0.6vw; font-size: 1.5vw; font-weight: 500; color: var(--ink-soft); }
+
+  .status { display: flex; align-items: center; }
+  .pill { display: flex; align-items: center; height: 3.6vw; min-height: 40px; padding: 0 1.3vw 0 1.1vw; border-radius: 999px;
+    font-size: 1.15vw; font-weight: 500; color: var(--ink-soft); }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #8ef0b0; margin-right: 0.7vw; box-shadow: 0 0 10px #8ef0b0; }
+  .pill.is-off .dot { background: #ff9b8a; box-shadow: 0 0 10px #ff9b8a; }
+  .pill .vol { margin-left: 1vw; padding-left: 1vw; border-left: 1px solid rgba(255, 255, 255, 0.22); color: var(--ink);
+    font-variant-numeric: tabular-nums; }
+  .round { width: 3.6vw; height: 3.6vw; min-width: 40px; min-height: 40px; margin-left: 0.8vw; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .round svg { width: 42%; height: 42%; }
+
+  /* On the TV itself: just the home screen, no remote */
+  .tv-mode .controls, .tv-mode #power { display: none; }
+  .tv-mode .app { padding-bottom: 9vh; }
+
+  .stage { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
+  .caption { margin: 0 0 1.6vw 0.4vw; min-height: 4.4vw; }
+  .caption h1 { margin: 0; font-size: 2.6vw; font-weight: 600; letter-spacing: -0.01em; text-shadow: 0 2px 18px rgba(10, 8, 40, 0.4); }
+  .caption p { margin: 0.35vw 0 0; font-size: 1.25vw; color: var(--ink-soft); }
+
+  /* ── Dock ─────────────────────────────────────────────── */
+  .dock { border-radius: 2.4vw; padding: 1.3vw; }
+  .tiles { display: grid; grid-template-columns: repeat(8, 1fr); grid-gap: 1.1vw; position: relative; }
+  .tile {
+    --tint: 255, 255, 255; --mx: 30%; --my: 18%;
+    position: relative; display: block; width: 100%; padding: 0; border: 0; cursor: pointer;
+    border-radius: 1.5vw; background: transparent; outline: none;
+    transition: transform 260ms cubic-bezier(.2, .8, .2, 1);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tile .face {
+    position: relative; display: block; padding-top: 62%; border-radius: inherit; overflow: hidden;
+    background: linear-gradient(160deg, rgba(var(--tint), 0.22), rgba(255, 255, 255, 0.07) 70%);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 10px 24px -14px var(--shadow);
+    transition: box-shadow 260ms ease, border-color 260ms ease, background 260ms ease;
+  }
+  /* specular light that follows the pointer / focus */
+  .tile .face::after {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; opacity: 0;
+    background: radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 55%);
+    transition: opacity 260ms ease;
+  }
+  .tile .mark { position: absolute; top: 0; left: 0; right: 0; bottom: 26%; display: flex; align-items: center; justify-content: center; }
+  .tile .label { position: absolute; left: 0; right: 0; bottom: 9%; text-align: center; font-size: 0.95vw; font-weight: 500;
+    color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6%; }
+  .tile .live { position: absolute; top: 8%; right: 7%; width: 7px; height: 7px; border-radius: 50%; background: #fff;
+    box-shadow: 0 0 8px #fff; display: none; }
+  .tile.is-running .live { display: block; }
+
+  .tile:hover, .tile.is-focus { transform: perspective(600px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) scale(1.09); z-index: 2; }
+  .tile:hover .face, .tile.is-focus .face {
+    background: linear-gradient(160deg, rgba(var(--tint), 0.42), rgba(255, 255, 255, 0.16) 75%);
+    border-color: rgba(255, 255, 255, 0.7);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 0 0 2px rgba(255, 255, 255, 0.85), 0 18px 40px -10px rgba(var(--tint), 0.55);
+  }
+  .tile:hover .face::after, .tile.is-focus .face::after { opacity: 1; }
+  .tile:hover .label, .tile.is-focus .label { color: var(--ink); }
+  .tile.is-launching .face { animation: launch 900ms ease-out; }
+  @keyframes launch { 0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.9); } 100% { box-shadow: 0 0 0 18px rgba(255, 255, 255, 0); } }
+
+  /* brand marks, set in type (no logo files) */
+  .m-netflix { color: #e50914; font-weight: 800; font-size: 3.1vw; transform: scaleX(0.82); letter-spacing: -0.04em; }
+  .m-youtube { width: 3.4vw; height: 2.4vw; border-radius: 0.6vw; background: #ff0033; position: relative; }
+  .m-youtube::after { content: ""; position: absolute; left: 40%; top: 28%; border-left: 1vw solid #fff;
+    border-top: 0.55vw solid transparent; border-bottom: 0.55vw solid transparent; }
+  .m-prime { font-weight: 700; font-size: 1.75vw; color: #fff; letter-spacing: -0.02em; }
+  .m-prime span { display: block; height: 3px; margin-top: 2px; border-radius: 3px; background: #1a98ff; width: 70%; }
+  .m-disney { font-weight: 700; font-size: 1.9vw; color: #fff; letter-spacing: -0.03em; }
+  .m-disney b { color: #8fd1ff; font-weight: 700; }
+  .m-appletv { font-weight: 600; font-size: 2.2vw; color: #fff; letter-spacing: -0.04em; }
+  .m-max { font-weight: 800; font-size: 2.2vw; color: #fff; letter-spacing: -0.05em; }
+  .m-icon svg { width: 2.6vw; height: 2.6vw; }
+  .m-letter { font-weight: 700; font-size: 2.4vw; }
+
+  .dock-note { padding: 2.4vw 1vw; text-align: center; color: var(--ink-soft); font-size: 1.2vw; }
+
+  /* ── Controls ─────────────────────────────────────────── */
+  .controls { margin-top: 1.4vw; display: flex; align-items: center; justify-content: center; }
+  .bar { display: flex; align-items: center; border-radius: 999px; padding: 0.55vw; }
+  .bar + .bar { margin-left: 1vw; }
+  .btn { height: 3.4vw; min-height: 40px; min-width: 3.4vw; padding: 0 1.1vw; margin: 0 0.15vw; border: 0; border-radius: 999px;
+    background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 1.05vw; font-weight: 500; color: var(--ink-soft); transition: background 160ms ease, color 160ms ease; }
+  .btn svg { width: 1.4vw; height: 1.4vw; min-width: 16px; min-height: 16px; }
+  .btn:hover, .btn:focus { background: var(--glass-strong); color: var(--ink); outline: none; }
+  .btn:active { background: rgba(255, 255, 255, 0.34); }
+  .btn.ok { background: rgba(255, 255, 255, 0.2); color: var(--ink); font-weight: 600; }
+  .btn.is-on { color: #ffd2a8; }
+  .dpad { display: flex; align-items: center; }
+  .vol-level { min-width: 3.2vw; text-align: center; font-variant-numeric: tabular-nums; color: var(--ink); font-size: 1.1vw; }
+  .round:focus, .btn:focus { outline: none; box-shadow: 0 0 0 2px #fff; }
+  .round:focus:not(:focus-visible), .btn:focus:not(:focus-visible) { box-shadow: none; }
+
+  /* ── Toast ───────────────────────────────────────────── */
+  .toast { position: fixed; left: 50%; top: 4.5vh; z-index: 5; max-width: 90vw; padding: 0.9vw 1.6vw; border-radius: 999px;
+    font-size: 1.1vw; font-weight: 500; transform: translate(-50%, -16px); opacity: 0; pointer-events: none;
+    transition: opacity 220ms ease, transform 220ms ease; }
+  .toast.is-shown { opacity: 1; transform: translate(-50%, 0); }
+  .toast.is-error { border-color: rgba(255, 170, 150, 0.7); }
+
+  /* ── Phone / narrow ──────────────────────────────────── */
+  @media (max-width: 760px) {
+    :root { --pad: 16px; }
+    .app { padding: 20px var(--pad) 24px; padding-top: calc(20px + env(safe-area-inset-top)); }
+    .clock { font-size: 56px; }
+    .date { font-size: 15px; margin-top: 6px; }
+    .pill { font-size: 13px; padding: 0 12px; }
+    .pill .name { display: none; }
+    .pill .dot { margin-right: 8px; }
+    .pill .vol { margin-left: 0; padding-left: 0; border-left: 0; }
+    .round { margin-left: 8px; }
+    .stage { justify-content: flex-start; margin-top: 28px; }
+    .caption { margin: 0 0 12px 2px; min-height: 52px; }
+    .caption h1 { font-size: 24px; }
+    .caption p { font-size: 14px; margin-top: 3px; }
+    .dock { border-radius: 26px; padding: 12px; }
+    .tiles { grid-template-columns: repeat(3, 1fr); grid-gap: 10px; }
+    .tile { border-radius: 16px; }
+    .tile .face { padding-top: 78%; }
+    .tile .label { font-size: 12px; }
+    .m-netflix { font-size: 34px; } .m-prime { font-size: 19px; } .m-disney { font-size: 20px; }
+    .m-appletv, .m-max { font-size: 24px; } .m-letter { font-size: 26px; }
+    .m-youtube { width: 38px; height: 27px; border-radius: 7px; }
+    .m-youtube::after { border-left-width: 11px; border-top-width: 6px; border-bottom-width: 6px; }
+    .m-icon svg { width: 28px; height: 28px; }
+    .dock-note { font-size: 14px; padding: 24px 8px; }
+    .controls { flex-direction: column; margin-top: 14px; }
+    .bar { width: 100%; justify-content: space-between; padding: 6px; }
+    .bar + .bar { margin-left: 0; margin-top: 10px; }
+    .btn { height: 46px; min-width: 42px; font-size: 13px; padding: 0 9px; margin: 0; }
+    .bar.nav { border-radius: 36px; padding: 10px 8px; }
+    .dpad { display: grid; grid-template-columns: 54px 62px 54px; grid-template-rows: 50px 58px 50px; grid-gap: 4px;
+      grid-template-areas: ". up ." "left ok right" ". down ."; }
+    .dpad .btn { width: 100%; height: 100%; }
+    .dpad [data-key="UP"] { grid-area: up; } .dpad [data-key="DOWN"] { grid-area: down; }
+    .dpad [data-key="LEFT"] { grid-area: left; } .dpad [data-key="RIGHT"] { grid-area: right; }
+    .dpad [data-key="ENTER"] { grid-area: ok; font-size: 15px; }
+    .btn svg { width: 20px; height: 20px; }
+    .vol-level { font-size: 15px; min-width: 40px; }
+    .toast { font-size: 14px; padding: 10px 18px; top: 16px; }
+  }
+  @media (max-width: 760px) and (min-height: 700px) { .stage { margin-top: 40px; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tile, .tile .face, .tile .face::after, .toast, .btn { transition: none; }
+    .tile:hover, .tile.is-focus { transform: scale(1.05); }
+    .tile.is-launching .face { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="scene" aria-hidden="true">
+  <div class="stars" id="stars"></div>
+  <div class="moon"></div>
+  <svg class="dunes" viewBox="0 0 1600 600" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="d1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a65a5c"/><stop offset="1" stop-color="#6e3b47"/></linearGradient>
+      <linearGradient id="d2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7a3f4f"/><stop offset="1" stop-color="#43243a"/></linearGradient>
+      <linearGradient id="d3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a2840"/><stop offset="1" stop-color="#24152c"/></linearGradient>
+    </defs>
+    <path fill="url(#d1)" d="M0 250 C 180 190, 330 200, 470 236 S 760 170, 930 214 S 1250 160, 1400 205 S 1560 230, 1600 220 L1600 600 L0 600 Z"/>
+    <path fill="none" stroke="rgba(255,205,170,0.35)" stroke-width="1.5" d="M0 250 C 180 190, 330 200, 470 236 S 760 170, 930 214 S 1250 160, 1400 205 S 1560 230, 1600 220"/>
+    <path fill="url(#d2)" d="M0 350 C 220 270, 420 300, 600 330 S 900 250, 1120 300 S 1450 260, 1600 300 L1600 600 L0 600 Z"/>
+    <path fill="none" stroke="rgba(255,190,160,0.22)" stroke-width="1.5" d="M0 350 C 220 270, 420 300, 600 330 S 900 250, 1120 300 S 1450 260, 1600 300"/>
+    <path fill="url(#d3)" d="M0 470 C 260 380, 520 420, 760 440 S 1180 370, 1600 430 L1600 600 L0 600 Z"/>
+  </svg>
+</div>
+
+<main class="app">
+  <header class="top">
+    <div>
+      <div class="clock" id="clock">--:--</div>
+      <div class="date" id="date"></div>
+    </div>
+    <div class="status">
+      <div class="pill glass" id="pill"><span class="dot"></span><span class="name" id="tvName">Connecting to TV</span><span class="vol" id="pillVol" hidden></span></div>
+      <button class="round glass" id="power" type="button" aria-label="Turn TV off">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="stage">
+    <div class="caption" aria-live="polite">
+      <h1 id="capTitle">&nbsp;</h1>
+      <p id="capSub">&nbsp;</p>
+    </div>
+
+    <nav class="dock glass" aria-label="Apps on your TV">
+      <div class="tiles" id="tiles" role="toolbar" aria-label="Apps"></div>
+      <div class="dock-note" id="dockNote">Finding the apps on your TV. The first scan takes about 30 seconds.</div>
+    </nav>
+
+    <div class="controls">
+      <div class="bar nav glass" role="group" aria-label="Navigation">
+        <button class="btn" data-key="RETURN" type="button">Back</button>
+        <div class="dpad">
+          <button class="btn" data-key="LEFT" type="button" aria-label="Left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+          <button class="btn" data-key="UP" type="button" aria-label="Up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15l7-7 7 7"/></svg></button>
+          <button class="btn ok" data-key="ENTER" type="button">OK</button>
+          <button class="btn" data-key="DOWN" type="button" aria-label="Down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l7 7 7-7"/></svg></button>
+          <button class="btn" data-key="RIGHT" type="button" aria-label="Right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
+        </div>
+        <button class="btn" data-key="HOME" type="button">Home</button>
+      </div>
+      <div class="bar glass" role="group" aria-label="Volume and playback">
+        <button class="btn" data-vol="down" type="button" aria-label="Volume down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 12h12"/></svg></button>
+        <span class="vol-level" id="volLevel" aria-live="polite">–</span>
+        <button class="btn" data-vol="up" type="button" aria-label="Volume up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 12h12M12 6v12"/></svg></button>
+        <button class="btn" id="mute" type="button" aria-pressed="false">Mute</button>
+        <button class="btn" data-key="PLAY" type="button" aria-label="Play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg></button>
+        <button class="btn" data-key="PAUSE" type="button" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg></button>
+        <button class="btn" data-key="SOURCE" type="button">Source</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast glass" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var state = { apps: [], running: null, power: null, volume: null, muted: false, focus: 0 };
+  var tvMode = /[?&]tv=1/.test(location.search) || /Tizen|SMART-TV/i.test(navigator.userAgent);
+  if (tvMode) document.documentElement.className += " tv-mode";
+
+  // ── API ───────────────────────────────────────────────
+  function api(path, body, timeoutMs) {
+    var ctrl = window.AbortController ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, timeoutMs || 15000) : null;
+    var opts = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
+    if (ctrl) opts.signal = ctrl.signal;
+    return fetch(path, opts).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (!r.ok || data.success === false) throw new Error(data.message || "The remote server returned " + r.status);
+        return data;
+      });
+    }, function (err) {
+      throw new Error(err && err.name === "AbortError" ? "The TV took too long to answer. Check that it's on." : "Can't reach the remote server. Is remote.py still running?");
+    }).then(function (d) { if (timer) clearTimeout(timer); return d; }, function (e) { if (timer) clearTimeout(timer); throw e; });
+  }
+
+  // ── Toast ─────────────────────────────────────────────
+  var toastTimer;
+  function toast(msg, isError) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.className = "toast glass is-shown" + (isError ? " is-error" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.className = "toast glass" + (isError ? " is-error" : ""); }, isError ? 5200 : 2600);
+  }
+
+  // ── Clock ─────────────────────────────────────────────
+  function tick() {
+    var now = new Date();
+    var h = now.getHours() % 12 || 12, m = now.getMinutes();
+    $("clock").textContent = h + ":" + (m < 10 ? "0" : "") + m;
+    $("date").textContent = now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  }
+
+  // ── Stars (deterministic so they don't jump between loads) ──
+  function stars() {
+    var seed = 7, shadows = [];
+    function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+    for (var i = 0; i < 140; i++) {
+      var a = (0.25 + rnd() * 0.65).toFixed(2);
+      shadows.push((rnd() * 100).toFixed(2) + "vw " + (rnd() * 52).toFixed(2) + "vh 0 " + (rnd() < 0.15 ? "1px" : "0") + " rgba(255,255,255," + a + ")");
+    }
+    $("stars").style.boxShadow = shadows.join(",");
+  }
+
+  // ── App tiles ─────────────────────────────────────────
+  var BRANDS = {
+    netflix: { tint: "229,9,20", mark: '<span class="m-netflix">N</span>' },
+    youtube: { tint: "255,0,51", mark: '<span class="m-youtube"></span>' },
+    prime: { tint: "26,152,255", mark: '<span class="m-prime">prime<span></span></span>' },
+    disney: { tint: "40,110,230", mark: '<span class="m-disney">Disney<b>+</b></span>' },
+    "apple tv": { tint: "200,200,215", mark: '<span class="m-appletv">tv</span>' },
+    hbo: { tint: "100,70,240", mark: '<span class="m-max">max</span>' },
+    max: { tint: "100,70,240", mark: '<span class="m-max">max</span>' },
+    browser: { tint: "80,190,255", mark: '<span class="m-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.6 3.8 5.6 3.8 9s-1.2 6.4-3.8 9c-2.6-2.6-3.8-5.6-3.8-9S9.4 5.6 12 3z"/></svg></span>' },
+    gallery: { tint: "255,170,90", mark: '<span class="m-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.6"/></svg></span>' }
+  };
+
+  function renderTiles() {
+    var wrap = $("tiles");
+    wrap.innerHTML = "";
+    state.apps.forEach(function (app, i) {
+      var brand = BRANDS[app.alias] || {};
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "tile";
+      b.setAttribute("data-index", i);
+      b.setAttribute("aria-label", "Open " + app.name + " on TV");
+      b.tabIndex = i === state.focus ? 0 : -1;
+      b.style.setProperty("--tint", brand.tint || "255,255,255");
+      var face = document.createElement("span");
+      face.className = "face";
+      var mark = document.createElement("span");
+      mark.className = "mark";
+      if (brand.mark) { mark.innerHTML = brand.mark; } else {
+        var l = document.createElement("span"); l.className = "m-letter"; l.textContent = (app.name || "?").charAt(0); mark.appendChild(l);
+      }
+      var label = document.createElement("span");
+      label.className = "label";
+      label.textContent = app.name;
+      var live = document.createElement("span");
+      live.className = "live";
+      face.appendChild(mark); face.appendChild(label); face.appendChild(live);
+      b.appendChild(face);
+      b.addEventListener("click", function () { launch(i); });
+      b.addEventListener("focus", function () { setFocus(i, false); });
+      b.addEventListener("mouseenter", function () { setFocus(i, false); });
+      b.addEventListener("pointermove", tilt);
+      b.addEventListener("pointerleave", untilt);
+      wrap.appendChild(b);
+    });
+    $("dockNote").hidden = state.apps.length > 0;
+    markRunning();
+    setFocus(Math.min(state.focus, state.apps.length - 1), false);
+  }
+
+  function tiles() { return Array.prototype.slice.call(document.querySelectorAll(".tile")); }
+
+  function setFocus(i, moveDom) {
+    var all = tiles();
+    if (!all.length || i < 0) { caption(); return; }
+    state.focus = i;
+    all.forEach(function (t, j) { t.tabIndex = j === i ? 0 : -1; t.classList.toggle("is-focus", j === i); });
+    if (moveDom) all[i].focus();
+    caption();
+  }
+
+  function caption() {
+    var app = state.apps[state.focus];
+    if (!app) { $("capTitle").innerHTML = "&nbsp;"; $("capSub").innerHTML = "&nbsp;"; return; }
+    $("capTitle").textContent = app.name;
+    $("capSub").textContent = state.running && state.running.id === app.id ? "Playing on your TV" : "Select to open on your TV";
+  }
+
+  function markRunning() {
+    tiles().forEach(function (t, i) {
+      var app = state.apps[i];
+      t.classList.toggle("is-running", !!(state.running && app && state.running.id === app.id));
+    });
+    caption();
+  }
+
+  // tvOS-style parallax: tilt toward the pointer and move the specular highlight with it
+  function tilt(e) {
+    var t = e.currentTarget, r = t.getBoundingClientRect();
+    var x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    t.style.setProperty("--mx", (x * 100).toFixed(1) + "%");
+    t.style.setProperty("--my", (y * 100).toFixed(1) + "%");
+    if (reduceMotion) return;
+    t.style.setProperty("--ry", ((x - 0.5) * 10).toFixed(2) + "deg");
+    t.style.setProperty("--rx", ((0.5 - y) * 10).toFixed(2) + "deg");
+  }
+  function untilt(e) {
+    var t = e.currentTarget;
+    t.style.setProperty("--rx", "0deg"); t.style.setProperty("--ry", "0deg");
+    t.style.setProperty("--mx", "30%"); t.style.setProperty("--my", "18%");
+  }
+
+  $("tiles").addEventListener("keydown", function (e) {
+    var n = state.apps.length, cols = window.innerWidth <= 760 ? 3 : n, i = state.focus;
+    var next = { ArrowRight: i + 1, ArrowLeft: i - 1, ArrowDown: i + cols, ArrowUp: i - cols, Home: 0, End: n - 1 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    if (next >= 0 && next < n) setFocus(next, true);
+  });
+
+  // ── Actions ───────────────────────────────────────────
+  function launch(i) {
+    var app = state.apps[i], tile = tiles()[i];
+    if (!app) return;
+    setFocus(i, false);
+    tile.classList.remove("is-launching"); void tile.offsetWidth; tile.classList.add("is-launching");
+    toast("Opening " + app.name + "…");
+    api("/api/launch", { app: app.alias }, 70000).then(function () {
+      toast(app.name + " is open on your TV");
+      state.running = { id: app.id, name: app.alias };
+      markRunning();
+      setTimeout(refreshCurrent, 4000);
+    }, function (err) { toast("Couldn't open " + app.name + ". " + err.message, true); });
+  }
+
+  function sendKey(key) {
+    api("/api/key", { key: key }, 35000).catch(function (err) {
+      toast(/unauthor|denied|timed out|timeout/i.test(err.message)
+        ? "Press Allow on the TV to let this remote connect, then try again."
+        : "That button didn't reach the TV. " + err.message, true);
+    });
+  }
+
+  function setVolumeUI() {
+    var v = state.volume;
+    $("volLevel").textContent = v === null || v < 0 ? "–" : (state.muted ? "Muted" : v);
+    var pv = $("pillVol");
+    pv.hidden = v === null || v < 0;
+    pv.textContent = state.muted ? "Muted" : "Volume " + v;
+    $("mute").textContent = state.muted ? "Unmute" : "Mute";
+    $("mute").setAttribute("aria-pressed", state.muted ? "true" : "false");
+    $("mute").classList.toggle("is-on", state.muted);
+  }
+
+  function changeVolume(dir) {
+    if (typeof state.volume === "number" && state.volume >= 0) {
+      state.volume = Math.max(0, Math.min(100, state.volume + (dir === "up" ? 1 : -1)));
+      setVolumeUI();
+    }
+    api("/api/volume", { action: dir }).then(function (d) {
+      if (typeof d.volume === "number") { state.volume = d.volume; setVolumeUI(); }
+    }, function (err) { toast("Volume didn't change. " + err.message, true); });
+  }
+
+  function toggleMute() {
+    var want = !state.muted;
+    api("/api/volume", { action: want ? "mute" : "unmute" }).then(function () {
+      state.muted = want; setVolumeUI(); toast(want ? "TV muted" : "TV unmuted");
+    }, function (err) { toast("Mute didn't change. " + err.message, true); });
+  }
+
+  function togglePower() {
+    var on = state.power !== "on";
+    toast(on ? "Turning the TV on…" : "Turning the TV off…");
+    api("/api/power", { action: on ? "on" : "off" }, 35000).then(function () {
+      toast(on ? "Wake signal sent. The TV should turn on in a few seconds." : "TV turned off");
+      setTimeout(refreshStatus, on ? 8000 : 3000);
+    }, function (err) { toast((on ? "Couldn't turn the TV on. " : "Couldn't turn the TV off. ") + err.message, true); });
+  }
+
+  // ── Polling ───────────────────────────────────────────
+  var inFlight = {};
+  function once(name, fn) {
+    if (inFlight[name]) return inFlight[name];
+    var p = fn();
+    var done = function () { inFlight[name] = null; };
+    p.then(done, done);
+    return (inFlight[name] = p);
+  }
+
+  function refreshStatus() {
+    return once("status", function () { return api("/api/status", null, 20000); }).then(function (s) {
+      state.power = s.power;
+      var on = s.power === "on";
+      $("pill").classList.toggle("is-off", !on);
+      $("tvName").textContent = on ? (s.name || "Samsung TV").replace(/^\[TV\]\s*/, "") : "TV is off";
+      $("power").setAttribute("aria-label", on ? "Turn TV off" : "Turn TV on");
+      state.volume = on && typeof s.volume === "number" ? s.volume : null;
+      state.muted = !!s.muted;
+      setVolumeUI();
+    }, function () {
+      $("pill").classList.add("is-off");
+      $("tvName").textContent = "Can't reach the TV";
+    });
+  }
+
+  function refreshCurrent() {
+    if (state.power !== "on") return;
+    once("current", function () { return api("/api/current", null, 70000); })
+      .then(function (d) { state.running = d.app; markRunning(); }, function () {});
+  }
+
+  function loadApps() {
+    api("/api/apps", null, 90000).then(function (d) {
+      state.apps = d.apps || [];
+      if (!state.apps.length) $("dockNote").textContent = "No supported apps were found on this TV.";
+      renderTiles();
+      refreshCurrent();
+    }, function (err) {
+      $("dockNote").textContent = "Couldn't load your apps. " + err.message + " Trying again in 20 seconds.";
+      setTimeout(loadApps, 20000);
+    });
+  }
+
+  // ── Wire up ───────────────────────────────────────────
+  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (b) {
+    b.addEventListener("click", function () { sendKey(b.getAttribute("data-key")); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-vol]"), function (b) {
+    b.addEventListener("click", function () { changeVolume(b.getAttribute("data-vol")); });
+  });
+  $("mute").addEventListener("click", toggleMute);
+  $("power").addEventListener("click", togglePower);
+
+  stars();
+  tick();
+  setInterval(tick, 1000);
+  refreshStatus().then(loadApps, loadApps);
+  setInterval(function () { if (!document.hidden) refreshStatus(); }, 15000);
+  setInterval(function () { if (!document.hidden) refreshCurrent(); }, 30000);
+})();
+</script>
+</body>
+</html>

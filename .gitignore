@@ -3,3 +3,5 @@ __pycache__/
 token.json
 .venv/
 *.egg-info/
+tv_state.json
+apps.json

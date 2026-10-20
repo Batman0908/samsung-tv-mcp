@@ -19,8 +19,10 @@ log = logging.getLogger("samsung-tv")
 
 mcp = FastMCP("samsung-tv")
 _tv = SamsungTV()
-_pool = ThreadPoolExecutor(max_workers=2)
-TOOL_TIMEOUT = 10
+_pool = ThreadPoolExecutor(max_workers=4)
+TOOL_TIMEOUT = 20  # covers a ~7s WebSocket (re)connect on 2020 TVs
+# The first app lookup probes every known app ID (~1.5s each); later calls use the cache
+SCAN_TIMEOUT = 60
 
 
 def _ok(message: str = "Done", **data: Any) -> dict[str, Any]:
@@ -33,7 +35,7 @@ def _err(message: str) -> dict[str, Any]:
 
 async def _safe(fn, *args, timeout: float = TOOL_TIMEOUT, **kwargs) -> dict[str, Any]:
     """Run sync function in thread with hard timeout. Never blocks the MCP."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await asyncio.wait_for(
             loop.run_in_executor(_pool, partial(fn, *args, **kwargs)),
@@ -167,12 +169,9 @@ async def tv_volume(
             return _ok(f"Volume set to {level}", volume=level)
         if action:
             a = action.lower()
-            if a == "up":
-                _tv.send_key("KEY_VOLUP")
-                return _ok("Volume up")
-            if a == "down":
-                _tv.send_key("KEY_VOLDOWN")
-                return _ok("Volume down")
+            if a in ("up", "down"):
+                vol = _tv.step_volume(1 if a == "up" else -1)
+                return _ok(f"Volume {a}: {vol}", volume=vol)
             if a == "mute":
                 _tv.set_mute(True)
                 return _ok("Muted")
@@ -209,12 +208,19 @@ async def tv_channel(
 
 
 @mcp.tool()
-async def tv_apps() -> dict[str, Any]:
-    """List all installed apps on the TV with their IDs.
+async def tv_apps(refresh: bool = False) -> dict[str, Any]:
+    """List the known apps that are installed on the TV, with their IDs.
+
+    Args:
+        refresh: Re-scan the TV instead of using the cached list (default False).
+                 Use after installing or removing apps.
 
     Returns app names and IDs that can be used with tv_launch.
     """
-    return _ok("Apps retrieved", apps=_tv.list_apps())
+    return await _safe(
+        lambda: _ok("Apps retrieved", apps=_tv.installed_apps(refresh=refresh)),
+        timeout=SCAN_TIMEOUT,
+    )
 
 
 @mcp.tool()
@@ -234,7 +240,7 @@ async def tv_launch(
     def _do():
         _tv.launch_app(app, deep_link)
         return _ok(f"Launched {app}")
-    return await _safe(_do)
+    return await _safe(_do, timeout=SCAN_TIMEOUT)
 
 
 @mcp.tool()
@@ -247,7 +253,7 @@ async def tv_close_app(app: str) -> dict[str, Any]:
     def _do():
         _tv.close_app(app)
         return _ok(f"Closed {app}")
-    return await _safe(_do)
+    return await _safe(_do, timeout=SCAN_TIMEOUT)
 
 
 # ── Current App ─────────────────────────────────────────────
@@ -257,7 +263,7 @@ async def tv_close_app(app: str) -> dict[str, Any]:
 async def tv_current_app() -> dict[str, Any]:
     """Detect which app is currently running on the TV.
 
-    Checks all known apps via REST API. Returns the running app's
+    Checks each installed known app via REST API. Returns the running app's
     name, ID, and visibility, or a message if no known app is active.
     """
     def _do():
@@ -265,7 +271,7 @@ async def tv_current_app() -> dict[str, Any]:
         if app:
             return _ok(f"Running: {app['name']}", **app)
         return _ok("No known app is currently running")
-    return await _safe(_do, timeout=40)
+    return await _safe(_do, timeout=SCAN_TIMEOUT)
 
 
 # ── Aspect Ratio ────────────────────────────────────────────

@@ -4,21 +4,32 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
+import threading
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
+from xml.sax.saxutils import escape
 
 from samsungtvws import SamsungTVWS
 
 log = logging.getLogger("samsung-tv")
 
 WS_TIMEOUT = 5
+# TU7000's secure WebSocket handshake takes ~7s; a shorter timeout falls back
+# to the unpaired port 8001, which the TV rejects as unauthorized.
+WS_OPEN_TIMEOUT = 15
 TOKEN_FILE = str(Path(__file__).parent / "token.json")
+STATE_FILE = Path(__file__).parent / "tv_state.json"
+INSTALLED_TTL = 24 * 3600  # installed apps rarely change; tv_apps(refresh=True) rescans
+# The TV's REST server times out under concurrent requests, so every
+# network call to the TV goes through this lock (re-entrant for nesting).
+_IO_LOCK = threading.RLock()
 _UPNP_NS = "urn:schemas-upnp-org:service"
 _SOAP_ENV = (
     '<?xml version="1.0" encoding="utf-8"?>'
@@ -47,6 +58,27 @@ APP_ALIASES: dict[str, list[str]] = {
     "gallery": ["3201710015037"],
     "smartthings": ["3201710015016"],
 }
+
+APPS_FILE = Path(__file__).parent / "apps.json"
+
+
+def _load_custom_apps() -> None:
+    """Merge user-defined apps from apps.json, e.g. {"ibo player": ["3202..."]}."""
+    try:
+        custom = json.loads(APPS_FILE.read_text())
+    except OSError:
+        return
+    except ValueError as e:
+        log.warning("Ignoring %s: %s", APPS_FILE, e)
+        return
+    for name, ids in custom.items():
+        ids = [ids] if isinstance(ids, str) else ids
+        if isinstance(ids, list) and all(isinstance(i, str) for i in ids):
+            APP_ALIASES[name.lower().strip()] = ids
+
+
+_load_custom_apps()
+
 
 NAVIGATE_KEYS = {
     "home": "KEY_HOME", "back": "KEY_RETURN", "exit": "KEY_EXIT",
@@ -130,7 +162,8 @@ def _soap_call(
             "SOAPAction": f'"{_UPNP_NS}:{service}:1#{action}"',
         },
     )
-    return urlopen(req, timeout=WS_TIMEOUT).read().decode()
+    with _IO_LOCK:
+        return urlopen(req, timeout=WS_TIMEOUT).read().decode()
 
 
 def _soap_value(xml_text: str, tag: str) -> str | None:
@@ -149,7 +182,31 @@ def wake_on_lan(mac: str) -> None:
     packet = b"\xff" * 6 + mac_bytes * 16
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        s.sendto(packet, ("255.255.255.255", 9))
+        # A few packets: TVs on Wi-Fi standby often miss the first one
+        for _ in range(3):
+            s.sendto(packet, ("255.255.255.255", 9))
+            time.sleep(0.1)
+
+
+# ── Persisted state (MAC survives restarts so power-on works) ───
+
+
+def _load_state() -> dict[str, Any]:
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(**values: Any) -> None:
+    state = _load_state()
+    if all(state.get(k) == v for k, v in values.items()):
+        return
+    state.update(values)
+    try:
+        STATE_FILE.write_text(json.dumps(state, indent=2))
+    except OSError as e:
+        log.warning("Could not save %s: %s", STATE_FILE, e)
 
 
 # ── Main TV Client ──────────────────────────────────────────────
@@ -158,31 +215,56 @@ def wake_on_lan(mac: str) -> None:
 class SamsungTV:
     """Unified Samsung TV controller — WebSocket, REST, UPnP."""
 
-    def __init__(self, ip: str | None = None):
-        self._ip = ip
+    def __init__(self, ip: str | None = None, mac: str | None = None):
+        state = _load_state()
+        self._ip = ip or os.environ.get("SAMSUNG_TV_IP") or None
+        # A MAC given explicitly (e.g. the wired MAC) wins over the Wi-Fi MAC the TV reports
+        self._mac_pinned = mac or os.environ.get("SAMSUNG_TV_MAC") or None
+        self._mac = self._mac_pinned or state.get("mac")
         self._ws: SamsungTVWS | None = None
-        self._mac: str | None = None
+        self._installed: list[dict[str, Any]] | None = None
+        self._installed_at = 0.0
 
     # ── Connection ───────────────────────────────────────────
 
     def _ensure_ip(self) -> str:
         if self._ip:
             return self._ip
-        tvs = discover(timeout=4.0)
-        if not tvs:
-            raise ConnectionError("No Samsung TV found on the network")
-        self._ip = tvs[0]["ip"]
-        log.info("Auto-discovered TV at %s (%s)", self._ip, tvs[0].get("name"))
-        return self._ip
+        with _IO_LOCK:
+            if self._ip:
+                return self._ip
+            tvs = discover(timeout=4.0)
+            if not tvs:
+                raise ConnectionError(
+                    "No Samsung TV found on the network. "
+                    "Set SAMSUNG_TV_IP if discovery is blocked."
+                )
+            self._ip = tvs[0]["ip"]
+            log.info("Auto-discovered TV at %s (%s)", self._ip, tvs[0].get("name"))
+            return self._ip
+
+    def _rest(self, path: str, method: str = "GET", timeout: float = WS_TIMEOUT) -> Any:
+        ip = self._ensure_ip()
+        req = Request(f"http://{ip}:8001/api/v2/{path}", method=method)
+        with _IO_LOCK:
+            raw = urlopen(req, timeout=timeout).read()
+        try:
+            return json.loads(raw) if raw.strip() else None
+        except ValueError:
+            if method != "GET":  # the action already happened; body is informational
+                return None
+            raise
 
     def _ensure_ws(self) -> SamsungTVWS:
         if self._ws is not None:
             return self._ws
         ip = self._ensure_ip()
+        # First pairing waits for someone to press "Allow" on the TV
+        timeout = WS_OPEN_TIMEOUT if Path(TOKEN_FILE).exists() else 30
         try:
             self._ws = SamsungTVWS(
                 host=ip, port=8002, token_file=TOKEN_FILE,
-                timeout=WS_TIMEOUT, name="ClaudeCode",
+                timeout=timeout, name="ClaudeCode", key_press_delay=0,
             )
             self._ws.open()
             log.info("Connected via WSS:8002")
@@ -190,33 +272,35 @@ class SamsungTV:
             log.warning("WSS:8002 failed, trying WS:8001")
             self._ws = SamsungTVWS(
                 host=ip, port=8001, token_file=TOKEN_FILE,
-                timeout=WS_TIMEOUT, name="ClaudeCode",
+                timeout=timeout, name="ClaudeCode", key_press_delay=0,
             )
             self._ws.open()
         return self._ws
 
     def _send_ws(self, method: str, **kwargs: Any) -> Any:
         """Send WebSocket command with auto-reconnect."""
-        for attempt in range(2):
-            ws = self._ensure_ws()
-            try:
-                return getattr(ws, method)(**kwargs)
-            except Exception as e:
-                self._ws = None
-                if attempt == 0:
-                    log.warning("WS error (%s), reconnecting...", e)
-                else:
-                    raise ConnectionError(f"TV WebSocket failed after retry: {e}") from e
+        with _IO_LOCK:
+            for attempt in range(2):
+                ws = self._ensure_ws()
+                try:
+                    return getattr(ws, method)(**kwargs)
+                except Exception as e:
+                    self._ws = None
+                    if attempt == 0:
+                        log.warning("WS error (%s), reconnecting...", e)
+                    else:
+                        raise ConnectionError(f"TV WebSocket failed after retry: {e}") from e
 
     # ── Device Info ──────────────────────────────────────────
 
     def info(self) -> dict[str, Any]:
         ip = self._ensure_ip()
         try:
-            raw = urlopen(f"http://{ip}:8001/api/v2/", timeout=WS_TIMEOUT).read()
-            data = json.loads(raw)
+            data = self._rest("")
             device = data.get("device", {})
-            self._mac = device.get("wifiMac")
+            if device.get("wifiMac") and not self._mac_pinned:
+                self._mac = device["wifiMac"]
+                _save_state(mac=self._mac)
             try:
                 device["currentVolume"] = self.get_volume()
             except Exception:
@@ -232,7 +316,7 @@ class SamsungTV:
                 "network": device.get("networkType", "unknown"),
                 "volume": device.get("currentVolume"),
             }
-        except (URLError, OSError):
+        except (URLError, OSError, ValueError):
             return {"power": "off", "ip": ip, "note": "TV appears to be off"}
 
     # ── Power ────────────────────────────────────────────────
@@ -249,7 +333,10 @@ class SamsungTV:
             except Exception:
                 pass
         if not target_mac:
-            raise ValueError("MAC address required. Use tv_info first.")
+            raise ValueError(
+                "TV MAC address unknown. Run tv_info once while the TV is on "
+                "(the MAC is saved for next time), or set SAMSUNG_TV_MAC."
+            )
         wake_on_lan(target_mac)
 
     # ── Keys ─────────────────────────────────────────────────
@@ -295,6 +382,13 @@ class SamsungTV:
             f"<DesiredVolume>{max(0, min(100, level))}</DesiredVolume>",
         )
 
+    def step_volume(self, delta: int) -> int:
+        """Change volume by delta via UPnP (the VOLUP/VOLDOWN keys are sometimes dropped)."""
+        with _IO_LOCK:
+            level = max(0, min(100, self.get_volume() + delta))
+            self.set_volume(level)
+        return level
+
     def get_mute(self) -> bool:
         ip = self._ensure_ip()
         xml = _soap_call(
@@ -322,47 +416,101 @@ class SamsungTV:
             time.sleep(0.3)
             self.send_key("KEY_ENTER")
         elif direction:
-            self.send_key("KEY_CHUP" if direction.lower() == "up" else "KEY_CHDOWN")
+            d = direction.lower()
+            if d not in ("up", "down"):
+                raise ValueError(f"Unknown direction '{direction}'. Use 'up' or 'down'")
+            self.send_key("KEY_CHUP" if d == "up" else "KEY_CHDOWN")
         else:
             raise ValueError("Provide either number or direction ('up'/'down')")
 
     # ── Apps ─────────────────────────────────────────────────
 
-    def _resolve_app_id(self, name_or_id: str) -> str:
+    def _candidate_ids(self, name_or_id: str) -> list[str]:
         alias = name_or_id.lower().strip()
         if alias in APP_ALIASES:
-            return APP_ALIASES[alias][0]
+            return APP_ALIASES[alias]
         if name_or_id.replace(".", "").replace("_", "").isalnum() and (
             len(name_or_id) > 8 or "." in name_or_id
         ):
-            return name_or_id
+            return [name_or_id]
         for key, ids in APP_ALIASES.items():
             if alias in key or key in alias:
-                return ids[0]
-        return name_or_id
+                return ids
+        return [name_or_id]
+
+    def _resolve_app_id(self, name_or_id: str) -> str:
+        """Pick the candidate ID that is actually installed on this TV.
+
+        Apps ship under different IDs per model year (e.g. Netflix is
+        3201907018807 on 2020 TVs, not 11101200001), so the first alias
+        ID is often wrong.
+        """
+        ids = self._candidate_ids(name_or_id)
+        if len(ids) > 1:
+            installed = {a["id"] for a in self.installed_apps()}
+            for app_id in ids:
+                if app_id in installed:
+                    return app_id
+        return ids[0]
+
+    def installed_apps(self, refresh: bool = False) -> list[dict[str, Any]]:
+        """Known apps that are installed on this TV, probed via REST.
+
+        The TV has no reliable "list apps" call on 2020 models, so each alias
+        ID is probed (404 = not installed). Probing takes ~1.5s per ID, so
+        the result is cached in memory and in tv_state.json.
+        """
+        now = time.time()
+        known = sorted({i for ids in APP_ALIASES.values() for i in ids})
+        if not refresh and self._installed is None:
+            cached = _load_state().get("installed")
+            # Rescan if apps.json added or removed apps since the last scan
+            if cached and now - cached.get("at", 0) < INSTALLED_TTL and cached.get("known") == known:
+                self._installed, self._installed_at = cached["apps"], cached["at"]
+        if not refresh and self._installed is not None and now - self._installed_at < INSTALLED_TTL:
+            return self._installed
+
+        found: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for alias, ids in APP_ALIASES.items():
+            for app_id in ids:
+                if app_id in seen:  # hbo/max share IDs
+                    continue
+                seen.add(app_id)
+                try:
+                    data = self._rest(f"applications/{app_id}")
+                except HTTPError as e:
+                    if e.code != 404:  # don't cache a TV hiccup as "not installed"
+                        raise
+                    continue
+                found.append({
+                    "id": app_id,
+                    "name": data.get("name") or alias.title(),
+                    "alias": alias,
+                })
+                break
+        self._installed, self._installed_at = found, now
+        _save_state(installed={"at": now, "apps": found, "known": known})
+        return found
 
     def list_apps(self) -> list[dict[str, Any]]:
-        """Return known launchable apps. Direct query not supported on TU7000."""
-        return [{"id": ids[0], "name": name.title()} for name, ids in APP_ALIASES.items()]
+        """Return known apps installed on this TV (direct query unsupported on TU7000)."""
+        return self.installed_apps()
 
     def launch_app(self, name_or_id: str, meta_tag: str | None = None) -> None:
         app_id = self._resolve_app_id(name_or_id)
-        ip = self._ensure_ip()
-        try:
-            req = Request(f"http://{ip}:8001/api/v2/applications/{app_id}", method="POST")
-            urlopen(req, timeout=WS_TIMEOUT)
-            return
-        except Exception:
-            pass
+        # REST launch can't carry a deep link, so deep links go over WebSocket
+        if not meta_tag:
+            try:
+                self._rest(f"applications/{app_id}", method="POST")
+                return
+            except Exception as e:
+                log.info("REST launch of %s failed (%s), trying WebSocket", app_id, e)
         self._send_ws("run_app", app_id=app_id, app_type=2, meta_tag=meta_tag or "")
 
     def close_app(self, name_or_id: str) -> None:
         app_id = self._resolve_app_id(name_or_id)
-        ip = self._ensure_ip()
-        req = Request(
-            f"http://{ip}:8001/api/v2/applications/{app_id}", method="DELETE"
-        )
-        urlopen(req, timeout=WS_TIMEOUT)
+        self._rest(f"applications/{app_id}", method="DELETE")
 
     # ── Browser ──────────────────────────────────────────────
 
@@ -384,14 +532,15 @@ class SamsungTV:
         meta = (
             f'<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"'
             f' xmlns:dc="http://purl.org/dc/elements/1.1/">'
-            f"<item><dc:title>{title}</dc:title></item></DIDL-Lite>"
+            f"<item><dc:title>{escape(title)}</dc:title></item></DIDL-Lite>"
         )
         _soap_call(
             ip, "/upnp/control/AVTransport1", "AVTransport",
             "SetAVTransportURI",
             f"<InstanceID>0</InstanceID>"
-            f"<CurrentURI>{url}</CurrentURI>"
-            f"<CurrentURIMetaData>{meta}</CurrentURIMetaData>",
+            f"<CurrentURI>{escape(url)}</CurrentURI>"
+            # DIDL-Lite is itself XML carried as text, so escape it once more
+            f"<CurrentURIMetaData>{escape(meta)}</CurrentURIMetaData>",
         )
         time.sleep(0.5)
         _soap_call(
@@ -414,7 +563,7 @@ class SamsungTV:
         elif a == "seek" and target:
             _soap_call(ip, "/upnp/control/AVTransport1", "AVTransport",
                        "Seek", f"<InstanceID>0</InstanceID>"
-                       f"<Unit>REL_TIME</Unit><Target>{target}</Target>")
+                       f"<Unit>REL_TIME</Unit><Target>{escape(target)}</Target>")
         elif a == "status":
             xml_t = _soap_call(ip, "/upnp/control/AVTransport1", "AVTransport",
                                "GetTransportInfo", "<InstanceID>0</InstanceID>")
@@ -433,24 +582,22 @@ class SamsungTV:
     # ── App Detection ────────────────────────────────────────
 
     def current_app(self) -> dict[str, Any] | None:
-        """Detect which known app is currently running via REST."""
-        ip = self._ensure_ip()
-        for name, ids in APP_ALIASES.items():
+        """Detect which known app is running, preferring the visible one."""
+        running = None
+        for app in self.installed_apps():
             try:
-                raw = urlopen(
-                    f"http://{ip}:8001/api/v2/applications/{ids[0]}",
-                    timeout=2,
-                ).read()
-                data = json.loads(raw)
-                if data.get("running"):
-                    return {
-                        "name": name,
-                        "id": ids[0],
-                        "visible": data.get("visible", False),
-                    }
-            except Exception:
+                data = self._rest(f"applications/{app['id']}", timeout=3)
+            except HTTPError as e:
+                if e.code != 404:
+                    raise
                 continue
-        return None
+            if not data.get("running"):
+                continue
+            hit = {"name": app["alias"], "id": app["id"], "visible": bool(data.get("visible"))}
+            if hit["visible"]:
+                return hit
+            running = running or hit
+        return running
 
     # ── Aspect Ratio ──────────────────────────────────────────
 
@@ -467,7 +614,7 @@ class SamsungTV:
         _soap_call(
             ip, "/upnp/control/RenderingControl1", "RenderingControl",
             "X_SetAspectRatio",
-            f"<InstanceID>0</InstanceID><AspectRatio>{ratio}</AspectRatio>",
+            f"<InstanceID>0</InstanceID><AspectRatio>{escape(ratio)}</AspectRatio>",
         )
 
     # ── Captions ──────────────────────────────────────────────
